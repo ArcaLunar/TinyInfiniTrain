@@ -199,34 +199,33 @@ void Tensor::Backward(std::shared_ptr<Tensor> gradient, bool retain_graph, bool 
 
 ```c++
 template <typename RetT, class... ArgsT> RetT Call(ArgsT... args) const {
-    // =================================== 作业 ===================================
-    // TODO：实现通用kernel调用接口
-    // 功能描述：将存储的函数指针转换为指定类型并调用
-    // HINT: 
-    // =================================== 作业 ===================================
+    using FuncT = RetT (*)(ArgsT...);
+    FuncT function = reinterpret_cast<FuncT>(func_ptr_);
+    return function(args...);
 }
 
 template <typename FuncT> void Register(const KeyT &key, FuncT &&kernel) {
-    // =================================== 作业 ===================================
-    // TODO：实现kernel注册机制
-    // 功能描述：将kernel函数与设备类型、名称绑定
-    // =================================== 作业 ===================================
+    CHECK(!key_to_kernel_map_.contains(key))
+        << "Kernel already registered: " << key.second << " on device: " << static_cast<int>(key.first);
+    key_to_kernel_map_.emplace(key, KernelFunction(std::forward<FuncT>(kernel)));
 }
 
-#define REGISTER_KERNEL(device, kernel_name, kernel_func) \
-    // =================================== 作业 ===================================
-    // TODO：实现自动注册宏
-    // 功能描述：在全局静态区注册kernel，避免显式初始化代码
-    // =================================== 作业 ===================================
+#define REGISTER_KERNEL(device, kernel_name, kernel_func)                                                              \
+    static const bool _register_##kernel_name##__LINE__ = []() {                                                       \
+        infini_train::Dispatcher::Instance().Register({device, #kernel_name}, kernel_func);                            \
+        return true;                                                                                                   \
+    }();
 ```
 
 #### 解决思路
 
-
+- `Call()` 的实现思路比较简单，就是做一个类型转换就可以直接调用了
+- `Register()` 也比较直接，就是直接往 `map` 里 `emplace` 一下就好了
+- `REGISTER_KERNEL()` 因为需要静态操作，所以需要用 `static const bool` + Lambda 函数静态执行。用 `do {} while(0)` 本质还是动态的。
 
 #### 遇到问题
 
-
+一开始的宏定义直接 `do {} while(0)` 简单粗暴，结果在 `.cu` 文件里碰到报错了，因为还是动态执行，得用 `static const bool` 配合 lambda 函数。
 
 ### 作业六：实现GPT-2整体训练
 
