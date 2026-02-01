@@ -55,21 +55,48 @@ N/A
 需要实现的代码块位置：`infini_train/src/kernels/cpu/linear.cc`
 
 ```c++
-    std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other) {
-        // =================================== 作业 ===================================
-        // TODO：实现CPU上的矩阵乘法前向计算
-        // REF:
-        // =================================== 作业 ===================================
+std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other) {
+    auto num_dim1 = input->Dims().size();
+    auto num_dim2 = other->Dims().size();
+    auto N = input->Dims()[num_dim1 - 2];
+    auto M = input->Dims()[num_dim1 - 1];
+    auto K = other->Dims()[num_dim2 - 1];
+    CHECK_EQ(M, other->Dims()[num_dim2 - 2]); // check matrix multiply valid
+
+    auto batch = num_dim1 == 3 ? input->Dims()[0] : 1;
+    std::vector<int64_t> output_dims = batch == 1 ? std::vector<int64_t>{N, K} : std::vector<int64_t>{batch, N, K};
+
+    auto output = std::make_shared<Tensor>(output_dims, input->Dtype(), input->GetDevice());
+
+    for (auto b = 0; b < batch; b++) {
+        output->EigenMatrix().block(b * N, 0, N, K)
+            = input->EigenMatrix().block(b * N, 0, N, M) * other->EigenMatrix().block(b * M, 0, M, K);
     }
 
-    std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
-        MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other,
-                    const std::shared_ptr<Tensor> &grad_output) {
-        // =================================== 作业 ===================================
-        // TODO：实现CPU上的矩阵乘法反向传播
-        // REF:
-        // =================================== 作业 ===================================
+    return {output};
+}
+
+std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
+MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other,
+            const std::shared_ptr<Tensor> &grad_output) {
+    auto grad_input = std::make_shared<Tensor>(input->Dims(), input->Dtype(), input->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(other->Dims(), other->Dtype(), other->GetDevice());
+
+    auto batch = input->Dims().size() == 3 ? input->Dims()[0] : 1;
+    auto N = input->Dims()[input->Dims().size() - 2];
+    auto M = input->Dims()[input->Dims().size() - 1];
+    auto K = other->Dims()[other->Dims().size() - 1];
+    for (auto b = 0; b < batch; b++) {
+        // compute grad for input: grad_input = grad_output * other^T
+        grad_input->EigenMatrix().block(b * N, 0, N, M)
+            = grad_output->EigenMatrix().block(b * N, 0, N, K) * other->EigenMatrix().block(b * M, 0, M, K).transpose();
+        // compute grad for other: grad_other = input^T * grad_output
+        grad_other->EigenMatrix().block(b * M, 0, M, K)
+            = input->EigenMatrix().block(b * N, 0, N, M).transpose() * grad_output->EigenMatrix().block(b * N, 0, N, K);
     }
+
+    return {grad_input, grad_other};
+}
 ```
 
 #### CUDA实现
@@ -98,11 +125,11 @@ N/A
 
 #### 解决思路
 
-
+- CPU 侧的矩阵乘法使用 Eigen 库进行计算，使用 `.block()` 同时处理了二维和三维的情况
 
 #### 遇到问题
 
-
+- CPU 侧基本没遇到什么问题，查了查 API
 
 ### 作业三：实现Adam优化器
 

@@ -11,25 +11,45 @@
 
 namespace infini_train::kernels::cpu {
 std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other) {
-    // =================================== 作业 ===================================
-    // TODO：实现CPU上的矩阵乘法前向计算
-    // REF:
-    // =================================== 作业 ===================================
+    auto num_dim1 = input->Dims().size();
+    auto num_dim2 = other->Dims().size();
+    auto N = input->Dims()[num_dim1 - 2];
+    auto M = input->Dims()[num_dim1 - 1];
+    auto K = other->Dims()[num_dim2 - 1];
+    CHECK_EQ(M, other->Dims()[num_dim2 - 2]); // check matrix multiply valid
 
-    auto output = std::make_shared<Tensor>();
+    auto batch = num_dim1 == 3 ? input->Dims()[0] : 1;
+    std::vector<int64_t> output_dims = batch == 1 ? std::vector<int64_t>{N, K} : std::vector<int64_t>{batch, N, K};
+
+    auto output = std::make_shared<Tensor>(output_dims, input->Dtype(), input->GetDevice());
+
+    for (auto b = 0; b < batch; b++) {
+        output->EigenMatrix().block(b * N, 0, N, K)
+            = input->EigenMatrix().block(b * N, 0, N, M) * other->EigenMatrix().block(b * M, 0, M, K);
+    }
+
     return {output};
 }
 
 std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
 MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other,
                const std::shared_ptr<Tensor> &grad_output) {
-    // =================================== 作业 ===================================
-    // TODO：实现CPU上的矩阵乘法反向传播
-    // REF:
-    // =================================== 作业 ===================================
+    auto grad_input = std::make_shared<Tensor>(input->Dims(), input->Dtype(), input->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(other->Dims(), other->Dtype(), other->GetDevice());
 
-    auto grad_input = std::make_shared<Tensor>();
-    auto grad_other = std::make_shared<Tensor>();
+    auto batch = input->Dims().size() == 3 ? input->Dims()[0] : 1;
+    auto N = input->Dims()[input->Dims().size() - 2];
+    auto M = input->Dims()[input->Dims().size() - 1];
+    auto K = other->Dims()[other->Dims().size() - 1];
+    for (auto b = 0; b < batch; b++) {
+        // compute grad for input: grad_input = grad_output * other^T
+        grad_input->EigenMatrix().block(b * N, 0, N, M)
+            = grad_output->EigenMatrix().block(b * N, 0, N, K) * other->EigenMatrix().block(b * M, 0, M, K).transpose();
+        // compute grad for other: grad_other = input^T * grad_output
+        grad_other->EigenMatrix().block(b * M, 0, M, K)
+            = input->EigenMatrix().block(b * N, 0, N, M).transpose() * grad_output->EigenMatrix().block(b * N, 0, N, K);
+    }
+
     return {grad_input, grad_other};
 }
 
