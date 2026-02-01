@@ -16,27 +16,33 @@
 
 ```c++
 std::vector<std::shared_ptr<Tensor>> Neg::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
-    // =================================== 作业 ===================================
-    // TODO：通过Dispatcher获取设备专属kernel，对输入张量进行取反操作
-    // HINT: 依赖test_dispatcher，kernel实现已给出
-    // =================================== 作业 ===================================
+    CHECK_EQ(input_tensors.size(), 1);
+    const auto &input = input_tensors[0];
+
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "NegForward"});
+
+    return {kernel.Call<std::shared_ptr<Tensor>>(input)};
 }
 
 std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
-    // =================================== 作业 ===================================
-    // TODO：通过Dispatcher获取设备专属的反向传播kernel，计算梯度
-    // HINT: 依赖test_dispatcher，kernel实现已给出
-    // =================================== 作业 ===================================
+    CHECK_EQ(grad_outputs.size(), 1);
+    const auto &input = grad_outputs[0];
+
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "NegBackward"});
+
+    return {kernel.Call<std::shared_ptr<Tensor>>(input)};
 }
 ```
 
 #### 解决思路
 
-
+照猫画虎，拿出 `input` 后，再拿出 `device, kernel` 最后直接进行分发调用
 
 #### 遇到问题
 
-
+N/A
 
 ### 作业二：实现矩阵乘法
 
