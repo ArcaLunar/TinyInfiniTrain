@@ -189,10 +189,16 @@ void AdamAccumulateGrad(const std::shared_ptr<Tensor> &grad, const std::shared_p
 
 ```c++
 std::shared_ptr<Tensor> Tensor::Flatten(int64_t start, int64_t end) {
-    // =================================== 作业 ===================================
-    // TODO：实现张量扁平化操作，将指定维度范围[start, end]内的所有维度合并为一个维度
-    // HINT: 
-    // =================================== 作业 ===================================
+    start = start < 0 ? start + dims_.size() : start;
+    end = end < 0 ? end + dims_.size() : end;
+    auto new_shape = std::vector<int64_t>(0);
+    for (int i = 0; i < start; i++) { new_shape.push_back(dims_[i]); }
+    int64_t shape = 1;
+    for (int i = start; i <= end; i++) { shape *= dims_[i]; }
+    new_shape.push_back(shape);
+    for (int i = end + 1; i < dims_.size(); i++) { new_shape.push_back(dims_[i]); }
+
+    return Contiguous()->View(new_shape);
 }
 ```
 
@@ -216,7 +222,9 @@ void Tensor::Backward(std::shared_ptr<Tensor> gradient, bool retain_graph, bool 
 
 #### 解决思路
 
-
+- `Flatten()` 的实现主要是
+    - 要考虑到 `start, end` $\lt 0$ 的情况，这点需要和 PyTorch 对齐
+    - 然后就是直接复制 `dims_` 并计算 `[start, end]` 这几个维度的 dim 乘积即可，按顺序 `push_back()`
 
 #### 遇到问题
 
