@@ -1,4 +1,4 @@
-#include "infini_train/include/autograd/function.h"
+ #include "infini_train/include/autograd/function.h"
 
 #include "glog/logging.h"
 
@@ -54,6 +54,7 @@ std::vector<std::shared_ptr<Tensor>> Function::Apply(const std::vector<std::shar
 
     grad_outputs_reached_ = 0;
     grad_outputs_.resize(output_tensors.size(), nullptr);
+    VLOG(1) << "Apply type=" << type_ << " outputs=" << output_tensors.size() << " this=" << this;
     for (int output_idx = 0; output_idx < output_tensors.size(); ++output_idx) {
         auto &output_tensor = output_tensors[output_idx];
         output_tensor->set_requires_grad(output_requires_grad);
@@ -66,6 +67,10 @@ std::vector<std::shared_ptr<Tensor>> Function::Apply(const std::vector<std::shar
 }
 
 void Function::BackwardPartial(const std::shared_ptr<Tensor> &grad_output, int grad_output_idx) {
+    CHECK_GE(grad_output_idx, 0);
+    CHECK_LT(grad_output_idx, static_cast<int>(grad_outputs_.size()))
+        << "grad_output_idx=" << grad_output_idx << ", grad_outputs_.size()=" << grad_outputs_.size()
+        << ", type=" << type_;
     if (!grad_outputs_[grad_output_idx]) {
         grad_outputs_[grad_output_idx] = grad_output;
         ++grad_outputs_reached_;

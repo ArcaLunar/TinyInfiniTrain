@@ -341,11 +341,15 @@ std::shared_ptr<Tensor> Tensor::Flatten(int64_t start, int64_t end) {
 
 ```c++
 void Tensor::Backward(std::shared_ptr<Tensor> gradient, bool retain_graph, bool create_graph) const {
-    // =================================== 作业 ===================================
-    // TODO：实现自动微分反向传播
-    // 功能描述：1. 计算当前张量对叶子节点的梯度    2. 支持多输出场景的梯度累加
-    // HINT: 
-    // =================================== 作业 ===================================
+    if (!grad_fn_) {
+        return;
+    }
+    if (!gradient) {
+        gradient = std::make_shared<Tensor>(std::vector<int64_t>{}, dtype_, GetDevice());
+        gradient->Fill<float>(1);
+    }
+
+    grad_fn_->BackwardPartial(gradient, output_idx_);
 }
 ```
 
@@ -354,10 +358,11 @@ void Tensor::Backward(std::shared_ptr<Tensor> gradient, bool retain_graph, bool 
 - `Flatten()` 的实现主要是
     - 要考虑到 `start, end` $\lt 0$ 的情况，这点需要和 PyTorch 对齐
     - 然后就是直接复制 `dims_` 并计算 `[start, end]` 这几个维度的 dim 乘积即可，按顺序 `push_back()`
+- `Backward()` 的实现主要是需要判断 `gradient` 是否为空，是的话，就当成标量进行创建；然后调用 `grad_fn_` 计算梯度 + 进行反向传播
 
 #### 遇到问题
 
-
+主要是需要理解 `Backward()` 函数的作用，然后考虑 `gradient/grad_fn_` 为空的 corner case.
 
 ### 作业五 注册算子kernel的实现
 

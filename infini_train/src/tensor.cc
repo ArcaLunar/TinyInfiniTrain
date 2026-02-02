@@ -357,10 +357,15 @@ std::shared_ptr<Tensor> Tensor::RequiresGrad() {
 }
 
 void Tensor::Backward(std::shared_ptr<Tensor> gradient, bool retain_graph, bool create_graph) const {
-    // =================================== 作业 ===================================
-    // TODO：实现自动微分反向传播
-    // 功能描述：1. 计算当前张量对叶子节点的梯度    2. 支持多输出场景的梯度累加
-    // =================================== 作业 ===================================
+    if (!grad_fn_) {
+        return;
+    }
+    if (!gradient) {
+        gradient = std::make_shared<Tensor>(std::vector<int64_t>{}, dtype_, GetDevice());
+        gradient->Fill<float>(1);
+    }
+
+    grad_fn_->BackwardPartial(gradient, output_idx_);
 }
 
 void Tensor::ZeroGrad() {
