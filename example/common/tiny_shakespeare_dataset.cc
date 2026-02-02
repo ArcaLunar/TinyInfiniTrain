@@ -10,6 +10,7 @@
 #include <memory>
 #include <numeric>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -61,15 +62,47 @@ TinyShakespeareFile ReadTinyShakespeareFile(const std::string &path, size_t sequ
     | magic(4B) | version(4B) | num_toks(4B) | reserved(1012B) | token数据           |
     ----------------------------------------------------------------------------------
        =================================== 作业 =================================== */
+    TinyShakespeareFile file;
+
+    std::ifstream ifs(path, std::ios::binary);
+    CHECK(ifs.is_open()) << "Failed to open file: " << path;
+
+    // skip 8 bytes of magic and version
+    const auto header = ReadSeveralBytesFromIfstream(1024, &ifs);
+    uint32_t magic = BytesToType<uint32_t>(header, 0);
+    file.type = TinyShakespeareType::kUINT16; // default to GPT-2
+
+    // get number of tokens
+    uint32_t num_toks = BytesToType<uint32_t>(header, 8);
+
+    // read token data
+    size_t type_size = kTypeToSize.at(file.type);
+    size_t data_size = num_toks * type_size;
+
+    file.dims = {static_cast<int64_t>(num_toks / sequence_length), static_cast<int64_t>(sequence_length)};
+    file.tensor = infini_train::Tensor(file.dims, DataType::kINT64);
+    auto dst = reinterpret_cast<int64_t *>(file.tensor.DataPtr());
+
+    if (file.type == TinyShakespeareType::kUINT16) {
+        std::vector<uint16_t> buffer(num_toks);
+        ifs.read(reinterpret_cast<char *>(buffer.data()), data_size);
+        for (size_t i = 0; i < num_toks; ++i) { dst[i] = static_cast<int64_t>(buffer[i]); }
+    } else if (file.type == TinyShakespeareType::kUINT32) {
+        std::vector<uint32_t> buffer(num_toks);
+        ifs.read(reinterpret_cast<char *>(buffer.data()), data_size);
+        for (size_t i = 0; i < num_toks; ++i) { dst[i] = static_cast<int64_t>(buffer[i]); }
+    } else {
+        LOG(FATAL) << "Unsupported TinyShakespeareType.";
+    }
+
+    return file;
 }
+
 } // namespace
 
-TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size_t sequence_length) {
-    // =================================== 作业 ===================================
-    // TODO：初始化数据集实例
-    // HINT: 调用ReadTinyShakespeareFile加载数据文件
-    // =================================== 作业 ===================================
-}
+TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size_t sequence_length)
+    : text_file_(ReadTinyShakespeareFile(filepath, sequence_length)), sequence_length_(sequence_length),
+      sequence_size_in_bytes_(sequence_length * kTypeToSize.at(text_file_.type)), num_samples_(text_file_.dims[0]) {}
 
 std::pair<std::shared_ptr<infini_train::Tensor>, std::shared_ptr<infini_train::Tensor>>
 TinyShakespeareDataset::operator[](size_t idx) const {

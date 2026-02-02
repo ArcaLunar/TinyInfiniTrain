@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "glog/logging.h"
+#include "infini_train/include/device.h"
+#include "infini_train/include/nn/functional.h"
 
 namespace infini_train {
 
@@ -69,24 +71,31 @@ int SampleMult(float *probabilities, int n, float coin) {
 }
 
 Tokenizer::Tokenizer(const std::string &filepath) {
-    /* ===================================== 作业 =====================================
-    TODO：实现Tokenizer二进制文件加载
+    std::ifstream ifs(filepath);
+    CHECK(ifs.is_open()) << "Failed to open file: " << filepath;
 
-    文件格式说明：
-    ----------------------------------------------------------------------------------
-    | HEADER (1024 bytes)                     | VOCAB TABLE                           |
-    | magic(4B) | version(4B) | vocab_size(4B) | reserved(1012B) | token词表数据       |
-    ----------------------------------------------------------------------------------
-    ===================================== 作业 ===================================== */
+    const auto header = ReadSeveralBytesFromIfstream(1024, &ifs);
+    magic_number_ = BytesToType<uint32_t>(header, 0);
+
+    uint32_t version = BytesToType<uint32_t>(header, 4);
+
+    eot_token_ = 50256; // default to GPT-2 EOT
+
+    vocab_size_ = BytesToType<uint32_t>(header, 8);
+
+    token_table_.resize(vocab_size_);
+    for (auto i = 0; i < vocab_size_; i++) {
+        uint8_t length;
+        ifs.read(reinterpret_cast<char *>(&length), sizeof(length));
+
+        std::vector<char> token_bytes(length);
+        ifs.read(token_bytes.data(), length);
+
+        token_table_[i] = std::string(token_bytes.data(), length);
+    }
 }
 
-std::string Tokenizer::Decode(uint32_t token_id) const {
-    /* ===================================== 作业 =====================================
-    TODO：实现token_id到文本的转换
-    功能描述：根据token_id返回对应的文本片段
-    ===================================== 作业 ===================================== */
-    return "";
-}
+std::string Tokenizer::Decode(uint32_t token_id) const { return token_table_.at(token_id); }
 
 void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_size, uint32_t sequence_length,
                              uint32_t text_length, Device device) const {
@@ -106,11 +115,26 @@ void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_siz
     auto x = std::make_shared<infini_train::Tensor>(x_tensor.To(device));
     uint64_t kRngState = kRngState;
     LOG(INFO) << "start generate text:";
+    auto cpu = Device(DeviceType::kCPU, 0);
     for (int t = prompt_len; t < text_length; t++) {
         /* ===================================== 作业 =====================================
         TODO：实现单步文本生成逻辑
         HINT：调用model.Forward推理获取logits，根据推理结果进行随机采样，调用Decode获取文本结果
         ===================================== 作业 ===================================== */
+        x = std::make_shared<infini_train::Tensor>(x->To(device));
+        auto logits = model.Forward({x}).at(0);
+        auto probs = nn::function::Softmax(logits, -1)->To(cpu);
+
+        auto data = probs.DataPtr();
+        auto vocab_size = probs.Dims()[2];
+        float *P = reinterpret_cast<float *>(data) + (t - 1) * vocab_size;
+        float coin = RandomF32(kRngState);
+        int64_t next = SampleMult(P, vocab_size, coin);
+
+        x = std::make_shared<infini_train::Tensor>(x_tensor.To(cpu));
+        auto x_data = x->DataPtr();
+        reinterpret_cast<int64_t *>(x_data)[t] = next;
+        std::cout << Decode(next);
     }
     std::cout << std::endl;
 }
