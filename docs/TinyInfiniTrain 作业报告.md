@@ -2,6 +2,8 @@
 
 ## 一、test 通过截图
 
+![](./assets/image.png)
+
 ## 二、作业步骤
 
 > 将代码填入下面代码块中指定位置，并详细描述完成该作业的解决思路和遇到的问题。
@@ -418,22 +420,50 @@ template <typename FuncT> void Register(const KeyT &key, FuncT &&kernel) {
 
 ```c++
 TinyShakespeareFile ReadTinyShakespeareFile(const std::string &path, size_t sequence_length) {
-    /* =================================== 作业 ===================================
-       TODO：实现二进制数据集文件解析
-       文件格式说明：
-    ----------------------------------------------------------------------------------
-    | HEADER (1024 bytes)                     | DATA (tokens)                        |
-    | magic(4B) | version(4B) | num_toks(4B) | reserved(1012B) | token数据           |
-    ----------------------------------------------------------------------------------
-       =================================== 作业 =================================== */
+    TinyShakespeareFile file;
+
+    std::ifstream ifs(path, std::ios::binary);
+    CHECK(ifs.is_open()) << "Failed to open file: " << path;
+
+    // skip 8 bytes of magic and version
+    const auto header = ReadSeveralBytesFromIfstream(1024, &ifs);
+    uint32_t magic = BytesToType<uint32_t>(header, 0);
+    auto type_it = kTypeMap.find(static_cast<int>(magic));
+    CHECK(type_it != kTypeMap.end()) << "Unsupported tinyshakespeare magic: " << magic;
+    file.type = type_it->second;
+
+    // get number of tokens and derive usable tokens/sequences
+    uint32_t num_toks = BytesToType<uint32_t>(header, 8);
+    size_t num_sequences = num_toks / sequence_length; // drop tail tokens that don't form a full sequence
+    size_t usable_tokens = num_sequences * sequence_length;
+
+    // read token data
+    size_t type_size = kTypeToSize.at(file.type);
+    size_t data_size = usable_tokens * type_size;
+
+    file.dims = {static_cast<int64_t>(num_sequences), static_cast<int64_t>(sequence_length)};
+    file.tensor = infini_train::Tensor(file.dims, DataType::kINT64);
+    auto dst = reinterpret_cast<int64_t *>(file.tensor.DataPtr());
+
+    if (file.type == TinyShakespeareType::kUINT16) {
+        std::vector<uint16_t> buffer(usable_tokens);
+        ifs.read(reinterpret_cast<char *>(buffer.data()), data_size);
+        for (size_t i = 0; i < usable_tokens; ++i) { dst[i] = static_cast<int64_t>(buffer[i]); }
+    } else if (file.type == TinyShakespeareType::kUINT32) {
+        std::vector<uint32_t> buffer(usable_tokens);
+        ifs.read(reinterpret_cast<char *>(buffer.data()), data_size);
+        for (size_t i = 0; i < usable_tokens; ++i) { dst[i] = static_cast<int64_t>(buffer[i]); }
+    } else {
+        LOG(FATAL) << "Unsupported TinyShakespeareType.";
+    }
+
+    return file;
 }
 
-TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size_t sequence_length) {
-    // =================================== 作业 ===================================
-    // TODO：初始化数据集实例
-    // HINT: 调用ReadTinyShakespeareFile加载数据文件
-    // =================================== 作业 ===================================
-}
+TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size_t sequence_length)
+    : text_file_(ReadTinyShakespeareFile(filepath, sequence_length)), sequence_length_(sequence_length),
+    token_size_in_bytes_(sizeof(int64_t)),
+    sequence_size_in_bytes_(sequence_length * token_size_in_bytes_), num_samples_(text_file_.dims[0]) {}
 ```
 
 #### Tokenizer功能实现
@@ -442,25 +472,33 @@ TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size
 
 ```c++
 Tokenizer::Tokenizer(const std::string &filepath) {
-    /* ===================================== 作业 =====================================
-    TODO：实现Tokenizer二进制文件加载
+    std::ifstream ifs(filepath);
+    CHECK(ifs.is_open()) << "Failed to open file: " << filepath;
 
-    文件格式说明：
-    ----------------------------------------------------------------------------------
-    | HEADER (1024 bytes)                     | VOCAB TABLE                           |
-    | magic(4B) | version(4B) | vocab_size(4B) | reserved(1012B) | token词表数据       |
-    ----------------------------------------------------------------------------------
-    ===================================== 作业 ===================================== */
+    const auto header = ReadSeveralBytesFromIfstream(1024, &ifs);
+    magic_number_ = BytesToType<uint32_t>(header, 0);
+
+    uint32_t version = BytesToType<uint32_t>(header, 4);
+
+    eot_token_ = 50256; // default to GPT-2 EOT
+
+    vocab_size_ = BytesToType<uint32_t>(header, 8);
+
+    token_table_.resize(vocab_size_);
+    for (auto i = 0; i < vocab_size_; i++) {
+        uint8_t length;
+        ifs.read(reinterpret_cast<char *>(&length), sizeof(length));
+
+        std::vector<char> token_bytes(length);
+        ifs.read(token_bytes.data(), length);
+
+        token_table_[i] = std::string(token_bytes.data(), length);
+    }
 }
 ```
 
 ```c++
-std::string Tokenizer::Decode(uint32_t token_id) const {
-    /* ===================================== 作业 =====================================
-    TODO：实现token_id到文本的转换
-    功能描述：根据token_id返回对应的文本片段
-    ===================================== 作业 ===================================== */
-}
+std::string Tokenizer::Decode(uint32_t token_id) const { return token_table_.at(token_id); }
 ```
 
 ```c++
@@ -473,6 +511,20 @@ void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_siz
         TODO：实现单步文本生成逻辑
         HINT：调用model.Forward推理获取logits，根据推理结果进行随机采样，调用Decode获取文本结果
         ===================================== 作业 ===================================== */
+        x = std::make_shared<infini_train::Tensor>(x->To(device));
+        auto logits = model.Forward({x}).at(0);
+        auto probs = nn::function::Softmax(logits, -1)->To(cpu);
+
+        auto data = probs.DataPtr();
+        auto vocab_size = probs.Dims()[2];
+        float *P = reinterpret_cast<float *>(data) + (t - 1) * vocab_size;
+        float coin = RandomF32(kRngState);
+        int64_t next = SampleMult(P, vocab_size, coin);
+
+        x = std::make_shared<infini_train::Tensor>(x_tensor.To(cpu));
+        auto x_data = x->DataPtr();
+        reinterpret_cast<int64_t *>(x_data)[t] = next;
+        std::cout << Decode(next);
     }
     std::cout << std::endl;
 }
@@ -480,7 +532,16 @@ void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_siz
 
 #### 解决思路
 
-
+- `Tokenizer` 的实现比较直接
+    - `Decode()` 直接取即可
+    - `GenerateText()` 按 Hint 的步骤来即可：先 `Forward`，然后取 logits，`Softmax` 计算概率，然后 `SampleMult` 进行采样，最后 `x_data[t]` 放回 tokens list，等待下一步 `Forward()`
+- 数据读取就有点麻烦
+    - 先读取 header 的信息
+    - 然后计算需要读取的 tokens bytes size，读取完之后直接循环进行赋值
+    - 需要注意的是，tokens 本身需要是 `kINT64`，但是存储可能是 `kUINT16` 或者 `kUINT32`，需要提前计算 byte size 然后手动类型转换。
 
 #### 遇到问题
 
+Tokenizer 初始化的坑在于其实 string 的长度和内容是写在 `.bin` 里的；此外 `.bin` 里的 `magic number` 和文件里的对应不上（文件里的 GPT2 Magic Number 定义也对不上……），所以这里直接写死了
+
+数据读取那里，一开始总是遇到问题……后来发现 `.bin` 的数据似乎不对，有 `string` 是不全的。得对末尾的 `string` 截断……
