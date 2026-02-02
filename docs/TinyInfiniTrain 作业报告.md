@@ -2,7 +2,7 @@
 
 ## 一、test 通过截图
 
-![](./assets/image.png)
+![](../assets/image.png)
 
 ## 二、作业步骤
 
