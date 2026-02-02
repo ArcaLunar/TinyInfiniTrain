@@ -106,30 +106,125 @@ MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
 需要实现的代码块位置：`infini_train/src/kernels/cuda/linear.cu`
 
 ```c++
-    std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other) {
-        // =================================== 作业 ===================================
-        // TODO：实现CUDA上的矩阵乘法前向计算
-        // REF:
-        // =================================== 作业 ===================================
+std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other) {
+    auto num_dim1 = input->Dims().size();
+    auto num_dim2 = other->Dims().size();
+    CHECK_EQ(num_dim1, num_dim2);
+
+    auto M = input->Dims()[num_dim1 - 2];
+    auto K = input->Dims()[num_dim1 - 1];
+    auto N = other->Dims()[num_dim2 - 1];
+    CHECK_EQ(K, other->Dims()[num_dim2 - 2]); // check matrix multiply valid
+    auto bs = std::accumulate(input->Dims().rbegin() + 2, input->Dims().rend(), 1, std::multiplies<int64_t>{});
+    auto output = std::make_shared<Tensor>(input->Dims(), input->Dtype(), input->GetDevice());
+
+    const float alpha = 1.0, beta = 0.0;
+
+    // output^T = other^T * input^T for cuda GEMM
+    // lhs = other^T: [..., N, K]
+    // rhs = input^T: [..., K, M]
+    // output^T: [..., N, M]
+    cublasHandle_t handle;
+    CUBLAS_CHECK(cublasCreate(&handle));
+    switch (input->Dtype()) {
+    case DataType::kFLOAT32: {
+        cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, other->DataPtr(), CUDA_R_32F, N,
+                                   N * K, input->DataPtr(), CUDA_R_32F, K, K * M, &beta, output->DataPtr(), CUDA_R_32F,
+                                   N, M * N, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT);
+        break;
+    }
+    case DataType::kBFLOAT16: {
+        cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, other->DataPtr(), CUDA_R_16BF, N,
+                                   N * K, input->DataPtr(), CUDA_R_16BF, K, K * M, &beta, output->DataPtr(),
+                                   CUDA_R_16BF, N, M * N, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT);
+        break;
+    }
+    default: {
+        LOG(FATAL) << "Unsupported data type in MatmulForward CUDA kernel.\n";
+    }
     }
 
-    std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
-        MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other,
-                    const std::shared_ptr<Tensor> &grad_output) {
-        // =================================== 作业 ===================================
-        // TODO：实现CUDA上的矩阵乘法反向传播
-        // REF:
-        // =================================== 作业 ===================================
+    return {output};
+}
+
+std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
+MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other,
+               const std::shared_ptr<Tensor> &grad_output) {
+    auto grad_input = std::make_shared<Tensor>(input->Dims(), input->Dtype(), input->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(other->Dims(), other->Dtype(), other->GetDevice());
+
+    /**
+        grad_input = grad_output * other^T
+                : [..., M, K]
+        grad_other = input^T * grad_output
+                : [..., K, N]
+        grad_output: [..., M, N]
+        other:     [..., K, N]
+        input:     [..., M, K]
+    */
+
+    auto M = input->Dims()[input->Dims().size() - 2];
+    auto K = input->Dims()[input->Dims().size() - 1];
+    auto N = other->Dims()[other->Dims().size() - 1];
+    CHECK_EQ(K, other->Dims()[other->Dims().size() - 2]); // check matrix multiply valid
+    CHECK_EQ(M, grad_output->Dims()[grad_output->Dims().size() - 2]);
+    CHECK_EQ(N, grad_output->Dims()[grad_output->Dims().size() - 1]);
+    auto bs = std::accumulate(input->Dims().rbegin() + 2, input->Dims().rend(), 1, std::multiplies<int64_t>{});
+    constexpr float alpha = 1.0, beta = 0.0;
+
+    /**
+        Column major:
+            grad_input^T = other * grad_output^T
+                grad_input^T = [..., K, M]
+                other =    [..., K, N]
+                grad_output^T = [..., N, M]
+            grad_other^T = grad_output^T * input
+                grad_other^T = [..., N, K]
+                grad_output^T = [..., N, M]
+                input =    [..., M, K]
+    */
+    cublasHandle_t handle;
+    CUBLAS_CHECK(cublasCreate(&handle));
+    switch (input->Dtype()) {
+    case DataType::kFLOAT32: {
+        // grad_input^T = other * grad_output^T
+        cublasGemmStridedBatchedEx(handle, CUBLAS_OP_T, CUBLAS_OP_N, K, M, N, &alpha, other->DataPtr(), CUDA_R_32F, N,
+                                   K * N, grad_output->DataPtr(), CUDA_R_32F, N, N * M, &beta, grad_input->DataPtr(),
+                                   CUDA_R_32F, K, M * K, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT);
+        // grad_other^T = grad_output^T * input
+        cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, CUBLAS_OP_T, N, K, M, &alpha, grad_output->DataPtr(),
+                                   CUDA_R_32F, N, N * M, input->DataPtr(), CUDA_R_32F, K, M * K, &beta,
+                                   grad_other->DataPtr(), CUDA_R_32F, N, K * N, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT);
+        break;
     }
+    case DataType::kBFLOAT16: {
+        cublasGemmStridedBatchedEx(handle, CUBLAS_OP_T, CUBLAS_OP_N, K, M, N, &alpha, other->DataPtr(), CUDA_R_16BF, N,
+                                   K * N, grad_output->DataPtr(), CUDA_R_16BF, N, N * M, &beta, grad_input->DataPtr(),
+                                   CUDA_R_16BF, K, M * K, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT);
+        // grad_other^T = grad_output^T * input
+        cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, CUBLAS_OP_T, N, K, M, &alpha, grad_output->DataPtr(),
+                                   CUDA_R_16BF, N, N * M, input->DataPtr(), CUDA_R_16BF, K, M * K, &beta,
+                                   grad_other->DataPtr(), CUDA_R_16BF, N, K * N, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT);
+        break;
+    }
+    default: {
+        LOG(FATAL) << "Unsupported data type in MatmulBackward CUDA kernel.\n";
+    }
+    }
+
+    return {grad_input, grad_other};
+}
 ```
 
 #### 解决思路
 
 - CPU 侧的矩阵乘法使用 Eigen 库进行计算，使用 `.block()` 同时处理了二维和三维的情况
+- CUDA 侧的矩阵乘法使用 cuBLAS 库进行计算，用 `cudaGemmStridedBatchedEx()` 同时处理多维的情况
 
 #### 遇到问题
 
-- CPU 侧基本没遇到什么问题，查了查 API
+- CPU 侧基本没遇到什么问题，查了查 API 就行了
+- CUDA 侧的主要问题是 column-major 下张量的维度设置错误，最后手推结合 GPT 解决。
 
 ### 作业三：实现Adam优化器
 
