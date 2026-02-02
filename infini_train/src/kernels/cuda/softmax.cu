@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cub/block/block_reduce.cuh>
+#include <cub/version.cuh>
 
 #include "glog/logging.h"
 
@@ -9,6 +10,18 @@
 #include "infini_train/include/tensor.h"
 
 namespace infini_train::kernels::cuda {
+
+#if defined(CUB_VERSION) && CUB_VERSION >= 200800
+    #include <cuda/std/functional>
+    using CubSumOp = ::cuda::std::plus<>;
+    using CubMaxOp = ::cuda::maximum<>;
+    using CubMinOp = ::cuda::minimum<>;
+#else
+    using CubSumOp = cub::Sum;
+    using CubMaxOp = cub::Max;
+    using CubMinOp = cub::Min;
+#endif
+
 template <size_t BLOCK_SIZE, typename T>
 __global__ void SoftmaxForwardKernel(T *output, const T *input, int64_t outer_size, int64_t axis_size,
                                      int64_t inner_size) {
@@ -29,7 +42,8 @@ __global__ void SoftmaxForwardKernel(T *output, const T *input, int64_t outer_si
         int64_t idx = (group * axis_size + axis) * inner_size + inner_idx;
         thread_max = max(thread_max, input[idx]);
     }
-    T block_max = BlockReduce(temp_storage_max).Reduce(thread_max, ::cuda::maximum<>());
+
+    T block_max = BlockReduce(temp_storage_max).Reduce(thread_max, CubMaxOp());
 
     if (tid == 0) {
         row_max = block_max;

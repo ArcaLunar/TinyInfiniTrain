@@ -1,4 +1,5 @@
 #include <cub/cub.cuh>
+#include <cub/version.cuh>
 
 #include "glog/logging.h"
 
@@ -11,25 +12,38 @@ constexpr float kInfinity = std::numeric_limits<float>::infinity();
 } // namespace
 
 namespace {
+
+#if defined(CUB_VERSION) && CUB_VERSION >= 200800
+    #include <cuda/std/functional>
+    using CubSumOp = ::cuda::std::plus<>;
+    using CubMaxOp = ::cuda::maximum<>;
+    using CubMinOp = ::cuda::minimum<>;
+#else
+    using CubSumOp = cub::Sum;
+    using CubMaxOp = cub::Max;
+    using CubMinOp = cub::Min;
+#endif
+
 // Reduction operators
 template <typename ReduceFunc> struct CubOp;
 
-template <> struct CubOp<::cuda::std::plus<>> {
+
+template <> struct CubOp<CubSumOp> {
     __device__ static float Init() { return 0.0f; }
     __device__ static float Reduce(float a, float b) { return a + b; }
-    __device__ static ::cuda::std::plus<> Op() { return ::cuda::std::plus<>(); }
+    __device__ static CubSumOp Op() { return CubSumOp(); }
 };
 
-template <> struct CubOp<::cuda::maximum<>> {
+template <> struct CubOp<CubMaxOp> {
     __device__ static float Init() { return -kInfinity; }
     __device__ static float Reduce(float a, float b) { return fmaxf(a, b); }
-    __device__ static ::cuda::maximum<> Op() { return ::cuda::maximum<>(); }
+    __device__ static CubMaxOp Op() { return CubMaxOp(); }
 };
 
-template <> struct CubOp<::cuda::minimum<>> {
+template <> struct CubOp<CubMinOp> {
     __device__ static float Init() { return kInfinity; }
     __device__ static float Reduce(float a, float b) { return fminf(a, b); }
-    __device__ static ::cuda::minimum<> Op() { return ::cuda::minimum<>(); }
+    __device__ static CubMinOp Op() { return CubMinOp(); }
 };
 
 // Finalization strategies
@@ -165,19 +179,20 @@ std::shared_ptr<Tensor> ReduceOpBackward(const std::shared_ptr<Tensor> &grad_out
 }
 
 std::shared_ptr<Tensor> MeanForward(const std::shared_ptr<Tensor> &input, const int64_t dim, const bool keep_dim) {
-    return ReduceOpForward<::cuda::std::plus<>>(input, dim, keep_dim, MeanFinalize{});
+
+    return ReduceOpForward<CubSumOp>(input, dim, keep_dim, MeanFinalize{});
 }
 
 std::shared_ptr<Tensor> SumForward(const std::shared_ptr<Tensor> &input, const int64_t dim, const bool keep_dim) {
-    return ReduceOpForward<::cuda::std::plus<>>(input, dim, keep_dim, IdentityFinalize{});
+    return ReduceOpForward<CubSumOp>(input, dim, keep_dim, IdentityFinalize{});
 }
 
 std::shared_ptr<Tensor> MaxForward(const std::shared_ptr<Tensor> &input, const int64_t dim, const bool keep_dim) {
-    return ReduceOpForward<::cuda::maximum<>>(input, dim, keep_dim, IdentityFinalize{});
+    return ReduceOpForward<CubMaxOp>(input, dim, keep_dim, IdentityFinalize{});
 }
 
 std::shared_ptr<Tensor> MinForward(const std::shared_ptr<Tensor> &input, const int64_t dim, const bool keep_dim) {
-    return ReduceOpForward<::cuda::minimum<>>(input, dim, keep_dim, IdentityFinalize{});
+    return ReduceOpForward<CubMinOp>(input, dim, keep_dim, IdentityFinalize{});
 }
 
 std::shared_ptr<Tensor> MeanBackward(const std::shared_ptr<Tensor> &grad_output, const std::vector<int64_t> &input_dims,
