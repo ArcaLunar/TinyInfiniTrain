@@ -277,13 +277,16 @@ std::shared_ptr<Tensor> Tensor::Contiguous() {
 }
 
 std::shared_ptr<Tensor> Tensor::Flatten(int64_t start, int64_t end) {
-    // return Contiguous()->View(new_shape);
-    // =================================== 作业 ===================================
-    // TODO：实现张量扁平化操作，将指定维度范围[start, end]内的所有维度合并为一个维度
-    // HINT:
-    // =================================== 作业 ===================================
+    start = start < 0 ? start + dims_.size() : start;
+    end = end < 0 ? end + dims_.size() : end;
+    auto new_shape = std::vector<int64_t>(0);
+    for (int i = 0; i < start; i++) { new_shape.push_back(dims_[i]); }
+    int64_t shape = 1;
+    for (int i = start; i <= end; i++) { shape *= dims_[i]; }
+    new_shape.push_back(shape);
+    for (int i = end + 1; i < dims_.size(); i++) { new_shape.push_back(dims_[i]); }
 
-    return std::make_shared<Tensor>();
+    return Contiguous()->View(new_shape);
 }
 
 std::shared_ptr<Tensor> Tensor::Squeeze(int64_t dim) {
