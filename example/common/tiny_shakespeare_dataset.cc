@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -70,27 +71,31 @@ TinyShakespeareFile ReadTinyShakespeareFile(const std::string &path, size_t sequ
     // skip 8 bytes of magic and version
     const auto header = ReadSeveralBytesFromIfstream(1024, &ifs);
     uint32_t magic = BytesToType<uint32_t>(header, 0);
-    file.type = TinyShakespeareType::kUINT16; // default to GPT-2
+    auto type_it = kTypeMap.find(static_cast<int>(magic));
+    CHECK(type_it != kTypeMap.end()) << "Unsupported tinyshakespeare magic: " << magic;
+    file.type = type_it->second;
 
-    // get number of tokens
+    // get number of tokens and derive usable tokens/sequences
     uint32_t num_toks = BytesToType<uint32_t>(header, 8);
+    size_t num_sequences = num_toks / sequence_length; // drop tail tokens that don't form a full sequence
+    size_t usable_tokens = num_sequences * sequence_length;
 
     // read token data
     size_t type_size = kTypeToSize.at(file.type);
-    size_t data_size = num_toks * type_size;
+    size_t data_size = usable_tokens * type_size;
 
-    file.dims = {static_cast<int64_t>(num_toks / sequence_length), static_cast<int64_t>(sequence_length)};
+    file.dims = {static_cast<int64_t>(num_sequences), static_cast<int64_t>(sequence_length)};
     file.tensor = infini_train::Tensor(file.dims, DataType::kINT64);
     auto dst = reinterpret_cast<int64_t *>(file.tensor.DataPtr());
 
     if (file.type == TinyShakespeareType::kUINT16) {
-        std::vector<uint16_t> buffer(num_toks);
+        std::vector<uint16_t> buffer(usable_tokens);
         ifs.read(reinterpret_cast<char *>(buffer.data()), data_size);
-        for (size_t i = 0; i < num_toks; ++i) { dst[i] = static_cast<int64_t>(buffer[i]); }
+        for (size_t i = 0; i < usable_tokens; ++i) { dst[i] = static_cast<int64_t>(buffer[i]); }
     } else if (file.type == TinyShakespeareType::kUINT32) {
-        std::vector<uint32_t> buffer(num_toks);
+        std::vector<uint32_t> buffer(usable_tokens);
         ifs.read(reinterpret_cast<char *>(buffer.data()), data_size);
-        for (size_t i = 0; i < num_toks; ++i) { dst[i] = static_cast<int64_t>(buffer[i]); }
+        for (size_t i = 0; i < usable_tokens; ++i) { dst[i] = static_cast<int64_t>(buffer[i]); }
     } else {
         LOG(FATAL) << "Unsupported TinyShakespeareType.";
     }
@@ -102,16 +107,18 @@ TinyShakespeareFile ReadTinyShakespeareFile(const std::string &path, size_t sequ
 
 TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size_t sequence_length)
     : text_file_(ReadTinyShakespeareFile(filepath, sequence_length)), sequence_length_(sequence_length),
-      sequence_size_in_bytes_(sequence_length * kTypeToSize.at(text_file_.type)), num_samples_(text_file_.dims[0]) {}
+    token_size_in_bytes_(sizeof(int64_t)),
+    sequence_size_in_bytes_(sequence_length * token_size_in_bytes_), num_samples_(text_file_.dims[0]) {}
 
 std::pair<std::shared_ptr<infini_train::Tensor>, std::shared_ptr<infini_train::Tensor>>
 TinyShakespeareDataset::operator[](size_t idx) const {
     CHECK_LT(idx, text_file_.dims[0] - 1);
     std::vector<int64_t> dims = std::vector<int64_t>(text_file_.dims.begin() + 1, text_file_.dims.end());
     // x: (seq_len), y: (seq_len) -> stack -> (bs, seq_len) (bs, seq_len)
-    return {std::make_shared<infini_train::Tensor>(text_file_.tensor, idx * sequence_size_in_bytes_, dims),
-            std::make_shared<infini_train::Tensor>(text_file_.tensor, idx * sequence_size_in_bytes_ + sizeof(int64_t),
-                                                   dims)};
+    size_t x_offset_bytes = idx * sequence_size_in_bytes_;
+    size_t y_offset_bytes = x_offset_bytes + token_size_in_bytes_;
+    return {std::make_shared<infini_train::Tensor>(text_file_.tensor, x_offset_bytes, dims),
+            std::make_shared<infini_train::Tensor>(text_file_.tensor, y_offset_bytes, dims)};
 }
 
 size_t TinyShakespeareDataset::Size() const { return num_samples_; }
