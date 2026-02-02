@@ -240,10 +240,23 @@ MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
 void AdamAccumulateGrad(const std::shared_ptr<Tensor> &grad, const std::shared_ptr<Tensor> &param,
                         const std::shared_ptr<Tensor> &m, const std::shared_ptr<Tensor> &v, float learning_rate,
                         float beta1, float beta2, float eps, int64_t t) {
-    // =================================== 作业 ===================================
-    // TODO：实现Adam优化器的梯度累积和参数更新
-    // REF: 
-    // =================================== 作业 ===================================
+    const float b1 = 1.0 - std::pow(beta1, (float)t);
+    const float b2 = 1.0 - std::pow(beta2, (float)t);
+
+    auto *g = (float *)(grad->DataPtr());
+    auto *m_ptr = (float *)(m->DataPtr());
+    auto *v_ptr = (float *)(v->DataPtr());
+    auto *p = (float *)(param->DataPtr());
+
+    for (auto i = 0; i < grad->NumElements(); ++i) {
+        m_ptr[i] = beta1 * m_ptr[i] + (1 - beta1) * g[i];
+        v_ptr[i] = beta2 * v_ptr[i] + (1 - beta2) * g[i] * g[i];
+
+        float m_hat = m_ptr[i] / b1;
+        float v_hat = v_ptr[i] / b2;
+
+        p[i] -= learning_rate * m_hat / (std::sqrt(v_hat) + eps);
+    }
 }
 ```
 
@@ -254,23 +267,44 @@ void AdamAccumulateGrad(const std::shared_ptr<Tensor> &grad, const std::shared_p
 代码位置：infini_train/src/kernels/cuda/accumulate_grad.cu
 
 ```c++
+__global__ void AdamAccGradKernel(float *g, float *m, float *v, float *p, float lr, float beta1, float beta2, float eps,
+                                  float b1, float b2, int64_t t, int64_t numel) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < numel) {
+        m[tid] = beta1 * m[tid] + (1 - beta1) * g[tid];
+        v[tid] = beta2 * v[tid] + (1 - beta2) * g[tid] * g[tid];
+
+        float mhat = m[tid] / b1;
+        float vhat = v[tid] / b2;
+
+        p[tid] -= lr * mhat / (sqrtf(vhat) + eps);
+    }
+}
+
 void AdamAccumulateGrad(const std::shared_ptr<Tensor> &grad, const std::shared_ptr<Tensor> &param,
                         const std::shared_ptr<Tensor> &m, const std::shared_ptr<Tensor> &v, float learning_rate,
                         float beta1, float beta2, float eps, int64_t t) {
-    // =================================== 作业 ===================================
-    // TODO：实现Adam优化器的梯度累积和参数更新
-    // REF: 
-    // =================================== 作业 ===================================
+    const float b1 = 1 - std::pow(beta1, (float)t);
+    const float b2 = 1 - std::pow(beta2, (float)t);
+    int64_t num_elements = grad->NumElements();
+
+    int threads = 256;
+    int blocks = (num_elements + threads - 1) / threads;
+
+    AdamAccGradKernel<<<blocks, threads>>>(static_cast<float *>(grad->DataPtr()), static_cast<float *>(m->DataPtr()),
+                                           static_cast<float *>(v->DataPtr()), static_cast<float *>(param->DataPtr()),
+                                           learning_rate, beta1, beta2, eps, b1, b2, t, num_elements);
 }
 ```
 
 #### 解决思路
 
-
+- CPU 端先提取出底层指针，然后直接循环原地修改
+- CUDA 端也是先提取出底层指针，然后直接全部发射到 cuda kernel 上，每一个线程处理一个下标（且不会有 bank conflict）
 
 #### 遇到问题
 
-
+N/A
 
 ### 作业四：实现Tensor基础操作
 

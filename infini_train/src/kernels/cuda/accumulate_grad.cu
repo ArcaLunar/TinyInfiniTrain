@@ -1,5 +1,6 @@
 #include "infini_train/include/dispatcher.h"
 #include "infini_train/include/tensor.h"
+#include <cstdint>
 
 namespace infini_train::kernels::cuda {
 
@@ -22,13 +23,33 @@ void AccumulateGrad(const std::shared_ptr<Tensor> &gradient, float rate, const s
     AccumulateGradKernel<<<num_blocks, threads_per_block>>>(grad_ptr, rate, tensor_ptr, num_elements);
 }
 
+__global__ void AdamAccGradKernel(float *g, float *m, float *v, float *p, float lr, float beta1, float beta2, float eps,
+                                  float b1, float b2, int64_t t, int64_t numel) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < numel) {
+        m[tid] = beta1 * m[tid] + (1 - beta1) * g[tid];
+        v[tid] = beta2 * v[tid] + (1 - beta2) * g[tid] * g[tid];
+
+        float mhat = m[tid] / b1;
+        float vhat = v[tid] / b2;
+
+        p[tid] -= lr * mhat / (sqrtf(vhat) + eps);
+    }
+}
+
 void AdamAccumulateGrad(const std::shared_ptr<Tensor> &grad, const std::shared_ptr<Tensor> &param,
                         const std::shared_ptr<Tensor> &m, const std::shared_ptr<Tensor> &v, float learning_rate,
                         float beta1, float beta2, float eps, int64_t t) {
-    // =================================== 作业 ===================================
-    // TODO：实现Adam优化器的梯度累积和参数更新
-    // REF:
-    // =================================== 作业 ===================================
+    const float b1 = 1 - std::pow(beta1, (float)t);
+    const float b2 = 1 - std::pow(beta2, (float)t);
+    int64_t num_elements = grad->NumElements();
+
+    int threads = 256;
+    int blocks = (num_elements + threads - 1) / threads;
+
+    AdamAccGradKernel<<<blocks, threads>>>(static_cast<float *>(grad->DataPtr()), static_cast<float *>(m->DataPtr()),
+                                           static_cast<float *>(v->DataPtr()), static_cast<float *>(param->DataPtr()),
+                                           learning_rate, beta1, beta2, eps, b1, b2, t, num_elements);
 }
 } // namespace infini_train::kernels::cuda
 
